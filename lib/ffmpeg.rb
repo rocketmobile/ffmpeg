@@ -12,35 +12,25 @@ module Paperclip
     def initialize(file, options = {}, attachment = nil)
       super
 
-      geometry          = options[:geometry].to_s
-      @file             = file
-      @crop             = geometry[-1,1] == '#'
-      @target_geometry  = options.fetch(:string_geometry_parser, Geometry).parse(geometry)
-      @current_geometry = options.fetch(:file_geometry_parser, Geometry).from_file(@file)
-      @cli              = ::Av.cli
-      @meta             = ::Av.cli.identify(@file.path)
-      @whiny            = options[:whiny].nil? ? true : options[:whiny]
-
-      @convert_options  = set_convert_options(options)
-
-      @format           = options[:format]
-
-      @geometry         = options[:geometry]
-      unless @geometry.nil?
-        modifier = @geometry[0]
-        @geometry[0] = '' if ['#', '<', '>'].include? modifier
-        @width, @height   = @geometry.split('x')
-        @keep_aspect      = @width[0] == '!' || @height[0] == '!'
-        @pad_only         = @keep_aspect    && modifier == '#'
-        @enlarge_only     = @keep_aspect    && modifier == '<'
-        @shrink_only      = @keep_aspect    && modifier == '>'
+      geometry             = options[:geometry].to_s
+      @file                = file
+      @crop                = geometry[-1,1] == '#'
+      @target_geometry     = options.fetch(:string_geometry_parser, Geometry).parse(geometry)
+      @current_geometry    = options.fetch(:file_geometry_parser, Geometry).from_file(@file)
+      @convert_options     = options[:convert_options]
+      @whiny               = options.fetch(:whiny, true)
+      @format              = options[:format]
+      @auto_orient         = options.fetch(:auto_orient, true)
+      @time                = options[:time].fetch(:time, 1)
+      @pad_color           = options[:pad_color].fetch(:pad_color, "black")
+      if @auto_orient && @current_geometry.respond_to?(:auto_orient)
+        @current_geometry.auto_orient
       end
 
-      @time             = options[:time].nil? ? 3 : options[:time]
-      @auto_rotate      = options[:auto_rotate].nil? ? false : options[:auto_rotate]
-      @pad_color        = options[:pad_color].nil? ? "black" : options[:pad_color]
+      @source_file_options = @source_file_options.split(/\s+/) if @source_file_options.respond_to?(:split)
+      @convert_options     = @convert_options.split(/\s+/)     if @convert_options.respond_to?(:split)
 
-      @convert_options[:output][:s] = format_geometry(@geometry) if @geometry.present?
+      @cli                 = ::Av.cli
 
       @current_format   = File.extname(@file.path)
       @basename         = File.basename(@file.path, @current_format)
@@ -96,12 +86,6 @@ module Paperclip
 
     def log message
       Paperclip.log "[transcoder] #{message}"
-    end
-
-    def set_convert_options options
-      return options[:convert_options] if options[:convert_options].present?
-      options[:convert_options] = {output: {}}
-      return options[:convert_options]
     end
 
     def format_geometry geometry
