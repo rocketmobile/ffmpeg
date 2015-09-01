@@ -1,131 +1,122 @@
 require "ffmpeg/version"
 require "paperclip"
-require "streamio-ffmpeg"
 
 module Paperclip
   class Ffmpeg < Processor
-
-    attr_accessor :current_geometry, :target_geometry, :format, :whiny, :convert_options,
-                  :source_file_options, :animated, :auto_orient, :rotation
-
-    # List of formats that we need to preserve animation
-    ANIMATED_FORMATS = %w(gif)
-
-    # Creates a Thumbnail object set to work on the +file+ given. It
-    # will attempt to transform the image into one defined by +target_geometry+
-    # which is a "WxH"-style string. +format+ will be inferred from the +file+
-    # unless specified. Thumbnail creation will raise no errors unless
+    # Creates a Video object set to work on the +file+ given. It
+    # will attempt to transcode the video into one defined by +target_geometry+
+    # which is a "WxH"-style string. +format+ should be specified.
+    # Video transcoding will raise no errors unless
     # +whiny+ is true (which it is, by default. If +convert_options+ is
-    # set, the options will be appended to the convert command upon image conversion
-    #
-    # Options include:
-    #
-    #   +geometry+ - the desired width and height of the thumbnail (required)
-    #   +file_geometry_parser+ - an object with a method named +from_file+ that takes an image file and produces its geometry and a +transformation_to+. Defaults to Paperclip::Geometry
-    #   +string_geometry_parser+ - an object with a method named +parse+ that takes a string and produces an object with +width+, +height+, and +to_s+ accessors. Defaults to Paperclip::Geometry
-    #   +source_file_options+ - flags passed to the +convert+ command that influence how the source file is read
-    #   +convert_options+ - flags passed to the +convert+ command that influence how the image is processed
-    #   +whiny+ - whether to raise an error when processing fails. Defaults to true
-    #   +format+ - the desired filename extension
-    #   +animated+ - whether to merge all the layers in the image. Defaults to true
+    # set, the options will be appended to the convert command upon video transcoding.
     def initialize(file, options = {}, attachment = nil)
       super
 
-      geometry             = options[:geometry].to_s
-      @crop                = geometry[-1,1] == '#'
-      @target_geometry     = options.fetch(:string_geometry_parser, Geometry).parse(geometry)
-      @current_geometry    = options.fetch(:file_geometry_parser, Geometry).from_file(@file)
-      @source_file_options = options[:source_file_options]
-      @convert_options     = options[:convert_options]
-      @whiny               = options.fetch(:whiny, true)
-      @format              = options[:format]
-      @animated            = options.fetch(:animated, true)
-      @auto_orient         = options.fetch(:auto_orient, true)
-      @rotation            = calculate_rotation
-      if @auto_orient && @current_geometry.respond_to?(:auto_orient)
-        @current_geometry.auto_orient
+      geometry          = options[:geometry].to_s
+      @file             = file
+      @crop             = geometry[-1,1] == '#'
+      @target_geometry  = options.fetch(:string_geometry_parser, Geometry).parse(geometry)
+      @current_geometry = options.fetch(:file_geometry_parser, Geometry).from_file(@file)
+      @cli              = ::Av.cli
+      @meta             = ::Av.cli.identify(@file.path)
+      @whiny            = options[:whiny].nil? ? true : options[:whiny]
+
+      @convert_options  = set_convert_options(options)
+
+      @format           = options[:format]
+
+      @geometry         = options[:geometry]
+      unless @geometry.nil?
+        modifier = @geometry[0]
+        @geometry[0] = '' if ['#', '<', '>'].include? modifier
+        @width, @height   = @geometry.split('x')
+        @keep_aspect      = @width[0] == '!' || @height[0] == '!'
+        @pad_only         = @keep_aspect    && modifier == '#'
+        @enlarge_only     = @keep_aspect    && modifier == '<'
+        @shrink_only      = @keep_aspect    && modifier == '>'
       end
 
-      @source_file_options = @source_file_options.split(/\s+/) if @source_file_options.respond_to?(:split)
-      @convert_options     = @convert_options.split(/\s+/)     if @convert_options.respond_to?(:split)
+      @time             = options[:time].nil? ? 3 : options[:time]
+      @auto_rotate      = options[:auto_rotate].nil? ? false : options[:auto_rotate]
+      @pad_color        = options[:pad_color].nil? ? "black" : options[:pad_color]
 
-      @current_format      = File.extname(@file.path)
-      @basename            = File.basename(@file.path, @current_format)
+      @convert_options[:output][:s] = format_geometry(@geometry) if @geometry.present?
+
+      @current_format   = File.extname(@file.path)
+      @basename         = File.basename(@file.path, @current_format)
+      attachment.instance_write(:meta, @meta) if attachment
     end
 
-    # Returns true if the +target_geometry+ is meant to crop.
-    def crop?
-      @crop
-    end
-
-    # Returns true if the image is meant to make use of additional convert options.
-    def convert_options?
-      !@convert_options.nil? && !@convert_options.empty?
-    end
-
-    # Performs the conversion of the +file+ into a thumbnail. Returns the Tempfile
-    # that contains the new image.
+    # Performs the transcoding of the +file+ into a thumbnail/video. Returns the Tempfile
+    # that contains the new image/video.
     def make
-      src = @file
-      filename = [@basename, @format ? ".#{@format}" : ""].join
-      dst = TempfileFactory.new.generate(filename)
+      ::Av.logger = Paperclip.logger
+      @cli.add_source @file
+      dst = Tempfile.new([@basename, @format ? ".#{@format}" : ''])
+      dst.binmode
 
-      begin
-        parameters = []
-        parameters << source_file_options
-        parameters << ":source"
-        parameters << transformation_command
-        parameters << convert_options
-        parameters << ":dest"
+      if @meta
+        log "Transcoding supported file #{@file.path}"
+        @cli.add_source(@file.path)
+        @cli.add_destination(dst.path)
+        @cli.reset_input_filters
 
-        parameters = parameters.flatten.compact.join(" ").strip.squeeze(" ")
+        if output_is_image?
+          @time = @time.call(@meta, @options) if @time.respond_to?(:call)
+          @cli.filter_seek @time
+        end
 
-        success = convert(parameters, :source => "#{File.expand_path(src.path)}#{'[0]' unless animated?}", :dest => File.expand_path(dst.path))
-      rescue Cocaine::ExitStatusError => e
-        raise Paperclip::Error, "There was an error processing the thumbnail for #{@basename}" if @whiny
-      rescue Cocaine::CommandNotFoundError => e
-        raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `convert` command. Please install ImageMagick.")
+        if @convert_options.present?
+          if @convert_options[:input]
+            @convert_options[:input].each do |h|
+              @cli.add_input_param h
+            end
+          end
+          if @convert_options[:output]
+            @convert_options[:output].each do |h|
+              @cli.add_output_param h
+            end
+          end
+        end
+
+        begin
+          @cli.run
+          log "Successfully transcoded #{@basename} to #{dst}"
+        rescue Cocaine::ExitStatusError => e
+          raise Paperclip::Error, "error while transcoding #{@basename}: #{e}" if @whiny
+        end
+      else
+        log "Unsupported file #{@file.path}"
+        # If the file is not supported, just return it
+        dst << @file.read
+        dst.close
       end
-
       dst
     end
 
-    # Returns the command ImageMagick's +convert+ needs to transform the image
-    # into the thumbnail.
-    def transformation_command
-      scale, crop = @current_geometry.transformation_to(@target_geometry, crop?)
-      trans = []
-      trans << "-coalesce" if animated?
-      trans << "-auto-orient" if auto_orient
-      trans << "-resize" << %["#{scale}"] unless scale.nil? || scale.empty?
-      trans << "-crop" << %["#{crop}"] << "+repage" if crop
-      trans << '-layers "optimize"' if animated?
-      trans << "-rotate #{rotation}" unless rotation.nil?
-      trans
+    def log message
+      Paperclip.log "[transcoder] #{message}"
     end
 
-    protected
-
-    # Return true if the format is animated
-    def animated?
-      @animated && (ANIMATED_FORMATS.include?(@format.to_s) || @format.blank?)  && identified_as_animated?
+    def set_convert_options options
+      return options[:convert_options] if options[:convert_options].present?
+      options[:convert_options] = {output: {}}
+      return options[:convert_options]
     end
 
-    def calculate_rotation
-      movie = FFMPEG::Movie.new(file.path)
-      movie.rotation rescue nil
+    def format_geometry geometry
+      return unless geometry.present?
+      return geometry.gsub(/[#!<>)]/, '')
     end
 
-    # Return true if ImageMagick's +identify+ returns an animated format
-    def identified_as_animated?
-      if @identified_as_animated.nil?
-        @identified_as_animated = ANIMATED_FORMATS.include? identify("-format %m :file", :file => "#{@file.path}[0]").to_s.downcase.strip
-      end
-      @identified_as_animated
-    rescue Cocaine::ExitStatusError => e
-      raise Paperclip::Error, "There was an error running `identify` for #{@basename}" if @whiny
-    rescue Cocaine::CommandNotFoundError => e
-      raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `identify` command. Please install ImageMagick.")
+    def output_is_image?
+      !!@format.to_s.match(/jpe?g|png|gif$/)
+    end
+  end
+
+  class Attachment
+    def meta
+      instance_read(:meta)
     end
   end
 end
