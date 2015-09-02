@@ -1,8 +1,12 @@
 require "ffmpeg/version"
 require "paperclip"
+require "av"
 
 module Paperclip
   class Ffmpeg < Processor
+    attr_accessor :current_geometry, :target_geometry, :format, :whiny, :convert_options,
+                  :source_file_options, :animated, :auto_orient, :cli
+
     # Creates a Video object set to work on the +file+ given. It
     # will attempt to transcode the video into one defined by +target_geometry+
     # which is a "WxH"-style string. +format+ should be specified.
@@ -21,8 +25,8 @@ module Paperclip
       @whiny               = options.fetch(:whiny, true)
       @format              = options[:format]
       @auto_orient         = options.fetch(:auto_orient, true)
-      @time                = options[:time].fetch(:time, 1)
-      @pad_color           = options[:pad_color].fetch(:pad_color, "black")
+      @time                = options.fetch(:time, 1)
+      @pad_color           = options.fetch(:pad_color, "black")
       if @auto_orient && @current_geometry.respond_to?(:auto_orient)
         @current_geometry.auto_orient
       end
@@ -45,42 +49,36 @@ module Paperclip
       dst = Tempfile.new([@basename, @format ? ".#{@format}" : ''])
       dst.binmode
 
-      if @meta
-        log "Transcoding supported file #{@file.path}"
-        @cli.add_source(@file.path)
-        @cli.add_destination(dst.path)
-        @cli.reset_input_filters
+      debugger
+      @cli.add_source(@file.path)
+      @cli.add_destination(dst.path)
+      @cli.reset_input_filters
 
-        if output_is_image?
-          @time = @time.call(@meta, @options) if @time.respond_to?(:call)
-          @cli.filter_seek @time
-        end
-
-        if @convert_options.present?
-          if @convert_options[:input]
-            @convert_options[:input].each do |h|
-              @cli.add_input_param h
-            end
-          end
-          if @convert_options[:output]
-            @convert_options[:output].each do |h|
-              @cli.add_output_param h
-            end
-          end
-        end
-
-        begin
-          @cli.run
-          log "Successfully transcoded #{@basename} to #{dst}"
-        rescue Cocaine::ExitStatusError => e
-          raise Paperclip::Error, "error while transcoding #{@basename}: #{e}" if @whiny
-        end
-      else
-        log "Unsupported file #{@file.path}"
-        # If the file is not supported, just return it
-        dst << @file.read
-        dst.close
+      if output_is_image?
+        @time = @time.call(@meta, @options) if @time.respond_to?(:call)
+        @cli.filter_seek @time
       end
+
+      # if @convert_options.present?
+      #   if @convert_options[:input]
+      #     @convert_options[:input].each do |h|
+      #       @cli.add_input_param h
+      #     end
+      #   end
+      #   if @convert_options[:output]
+      #     @convert_options[:output].each do |h|
+      #       @cli.add_output_param h
+      #     end
+      #   end
+      # end
+
+      begin
+        @cli.run
+        log "Successfully transcoded #{@basename} to #{dst}"
+      rescue Cocaine::ExitStatusError => e
+        raise Paperclip::Error, "error while transcoding #{@basename}: #{e}" if @whiny
+      end
+
       dst
     end
 
