@@ -27,5 +27,4 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency             "paperclip",       "~> 4.2.0"
   spec.add_dependency             "cocaine",         "~> 0.5.7"
-  spec.add_dependency             "av",              "~> 0.9.0"
 end

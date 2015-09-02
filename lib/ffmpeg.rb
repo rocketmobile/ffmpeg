@@ -5,7 +5,7 @@ require "av"
 module Paperclip
   class Ffmpeg < Processor
     attr_accessor :current_geometry, :target_geometry, :format, :whiny, :convert_options,
-                  :source_file_options, :animated, :auto_orient, :cli
+                  :animated, :auto_rotate, :cli, :basename
 
     # Creates a Video object set to work on the +file+ given. It
     # will attempt to transcode the video into one defined by +target_geometry+
@@ -24,20 +24,17 @@ module Paperclip
       @convert_options     = options[:convert_options]
       @whiny               = options.fetch(:whiny, true)
       @format              = options[:format]
-      @auto_orient         = options.fetch(:auto_orient, true)
+      @auto_rotate         = options.fetch(:auto_rotate, true)
       @time                = options.fetch(:time, 1)
       @pad_color           = options.fetch(:pad_color, "black")
-      if @auto_orient && @current_geometry.respond_to?(:auto_orient)
-        @current_geometry.auto_orient
-      end
 
       @source_file_options = @source_file_options.split(/\s+/) if @source_file_options.respond_to?(:split)
       @convert_options     = @convert_options.split(/\s+/)     if @convert_options.respond_to?(:split)
 
       @cli                 = ::Av.cli
-
-      @current_format   = File.extname(@file.path)
-      @basename         = File.basename(@file.path, @current_format)
+      @meta                = ::Av.cli.identify(@file.path)
+      @current_format      = File.extname(@file.path)
+      @basename            = File.basename(@file.path, @current_format)
       attachment.instance_write(:meta, @meta) if attachment
     end
 
@@ -45,38 +42,41 @@ module Paperclip
     # that contains the new image/video.
     def make
       ::Av.logger = Paperclip.logger
-      @cli.add_source @file
-      dst = Tempfile.new([@basename, @format ? ".#{@format}" : ''])
+      cli.add_source(file)
+      dst = Tempfile.new([basename, format ? ".#{format}" : ''])
       dst.binmode
 
-      debugger
-      @cli.add_source(@file.path)
-      @cli.add_destination(dst.path)
-      @cli.reset_input_filters
+      cli.add_source(file.path)
+      cli.add_destination(dst.path)
+      cli.reset_input_filters
+
+      if auto_rotate && @meta[:rotate]
+        cli.filter_rotate @meta[:rotate]
+      end
 
       if output_is_image?
         @time = @time.call(@meta, @options) if @time.respond_to?(:call)
-        @cli.filter_seek @time
+        cli.filter_seek @time
       end
 
       # if @convert_options.present?
       #   if @convert_options[:input]
       #     @convert_options[:input].each do |h|
-      #       @cli.add_input_param h
+      #       cli.add_input_param h
       #     end
       #   end
       #   if @convert_options[:output]
       #     @convert_options[:output].each do |h|
-      #       @cli.add_output_param h
+      #       cli.add_output_param h
       #     end
       #   end
       # end
 
       begin
-        @cli.run
-        log "Successfully transcoded #{@basename} to #{dst}"
+        cli.run
+        log "Successfully transcoded #{basename} to #{dst}"
       rescue Cocaine::ExitStatusError => e
-        raise Paperclip::Error, "error while transcoding #{@basename}: #{e}" if @whiny
+        raise Paperclip::Error, "error while transcoding #{basename}: #{e}" if whiny
       end
 
       dst
