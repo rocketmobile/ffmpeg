@@ -41,11 +41,19 @@ module Paperclip
       # end
       # cli.add_output_param "vf", "crop=#{target_geometry.height}:#{target_geometry.width}"
 
-      parameters << "-i :source"
+
+      parameters = []
+      # parameters << source_file_options
+      parameters << "-ss 1 -i :source"
+      # parameters << transformation_command
+      # parameters << convert_options
+      parameters << "-qscale:v 2 -vframes 1 :dest"
+      parameters = parameters.flatten.compact.join(" ").strip.squeeze(" ")
+
       begin
-        Paperclip.run("ffmpeg", parameters, source: "#{File.expand_path(src.path)}", dest: File.expand_path(dst.path))
+        Paperclip.run("ffmpeg", parameters, source: File.expand_path(src.path), dest: File.expand_path(dst.path))
       rescue Cocaine::ExitStatusError => e
-        raise Paperclip::Error, "There was an error processing the thumbnail for #{basename}" if whiny
+        raise Paperclip::Error, "There was an error processing the thumbnail for #{basename}"
       rescue Cocaine::CommandNotFoundError => e
         raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `ffmpeg` command. Please install Ffmpeg.")
       end
@@ -53,17 +61,27 @@ module Paperclip
       dst
     end
 
-    def log message
-      Paperclip.log "[transcoder] #{message}"
+    def transformation_command
+      # scale, crop = @current_geometry.transformation_to(@target_geometry, crop?)
+      trans = []
+      # trans << "-coalesce" if animated?
+      # trans << "-auto-orient" if auto_orient
+      # trans << "-resize" << %["#{scale}"] unless scale.nil? || scale.empty?
+      # trans << "-crop" << %["#{crop}"] << "+repage" if crop
+      # trans << '-layers "optimize"' if animated?
+      trans
     end
 
-    def format_geometry geometry
-      return unless geometry.present?
-      return geometry.gsub(/[#!<>)]/, '')
+    def log(message)
+      Paperclip.log "[ffmpeg] #{message}"
     end
 
     def output_is_image?
       !!@format.to_s.match(/jpe?g|png|gif$/)
+    end
+
+    def whiny?
+      whiny
     end
   end
 end
