@@ -65,10 +65,6 @@ module Paperclip
       trans
     end
 
-    def log(message)
-      Paperclip.log "[ffmpeg] #{message}"
-    end
-
     def output_is_image?
       !!format.to_s.match(/jpe?g|png|gif$/)
     end
