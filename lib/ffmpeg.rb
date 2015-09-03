@@ -1,18 +1,11 @@
 require "ffmpeg/version"
 require "paperclip"
-require "av"
 
 module Paperclip
   class Ffmpeg < Processor
-    attr_accessor :current_geometry, :target_geometry, :format, :whiny, :convert_options,
-                  :animated, :auto_rotate, :cli, :basename
+    attr_accessor :current_geometry, :target_geometry, :format, :whiny,
+                  :auto_rotate, :basename
 
-    # Creates a Video object set to work on the +file+ given. It
-    # will attempt to transcode the video into one defined by +target_geometry+
-    # which is a "WxH"-style string. +format+ should be specified.
-    # Video transcoding will raise no errors unless
-    # +whiny+ is true (which it is, by default. If +convert_options+ is
-    # set, the options will be appended to the convert command upon video transcoding.
     def initialize(file, options = {}, attachment = nil)
       super
 
@@ -28,55 +21,36 @@ module Paperclip
       @time                = options.fetch(:time, 1)
       @pad_color           = options.fetch(:pad_color, "black")
 
-      @source_file_options = @source_file_options.split(/\s+/) if @source_file_options.respond_to?(:split)
-      @convert_options     = @convert_options.split(/\s+/)     if @convert_options.respond_to?(:split)
-
-      @cli                 = ::Av.cli
-      @meta                = ::Av.cli.identify(@file.path)
       @current_format      = File.extname(@file.path)
       @basename            = File.basename(@file.path, @current_format)
-      attachment.instance_write(:meta, @meta) if attachment
     end
 
     # Performs the transcoding of the +file+ into a thumbnail/video. Returns the Tempfile
     # that contains the new image/video.
     def make
-      ::Av.logger = Paperclip.logger
-      cli.add_source(file)
+      src = file
       dst = Tempfile.new([basename, format ? ".#{format}" : ''])
       dst.binmode
 
-      cli.add_source(file.path)
       cli.add_destination(dst.path)
-      cli.reset_input_filters
 
-      if auto_rotate && @meta[:rotate]
-        cli.filter_rotate @meta[:rotate]
-      end
-
-      if output_is_image?
-        @time = @time.call(@meta, @options) if @time.respond_to?(:call)
-        cli.filter_seek @time
-      end
-
-      # if @convert_options.present?
-      #   if @convert_options[:input]
-      #     @convert_options[:input].each do |h|
-      #       cli.add_input_param h
-      #     end
-      #   end
-      #   if @convert_options[:output]
-      #     @convert_options[:output].each do |h|
-      #       cli.add_output_param h
-      #     end
-      #   end
+      # if output_is_image?
+      #   @time = @time.call(@meta, @options) if @time.respond_to?(:call)
+      #   cli.filter_seek @time
       # end
 
+      # if auto_rotate && @meta[:rotate]
+      #   cli.filter_rotate @meta[:rotate]
+      # end
+
+      # cli.add_output_param "vf", "crop=#{target_geometry.height}:#{target_geometry.width}"
+
       begin
-        cli.run
-        log "Successfully transcoded #{basename} to #{dst}"
+        Paperclip.run('convert', arguments, local_options)
       rescue Cocaine::ExitStatusError => e
-        raise Paperclip::Error, "error while transcoding #{basename}: #{e}" if whiny
+        raise Paperclip::Error, "There was an error processing the thumbnail for #{basename}" if whiny
+      rescue Cocaine::CommandNotFoundError => e
+        raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `ffmpeg` command. Please install Ffmpeg.")
       end
 
       dst
@@ -93,12 +67,6 @@ module Paperclip
 
     def output_is_image?
       !!@format.to_s.match(/jpe?g|png|gif$/)
-    end
-  end
-
-  class Attachment
-    def meta
-      instance_read(:meta)
     end
   end
 end
