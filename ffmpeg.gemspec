@@ -26,5 +26,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "sqlite3",         "~> 1.3.10"
 
   spec.add_dependency             "paperclip",       "~> 4.2.0"
-  spec.add_dependency             "cocaine",         "~> 0.5.7"
+  spec.add_dependency             "streamio-ffmpeg", "~> 1.0.0"
 end

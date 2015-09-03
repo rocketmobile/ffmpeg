@@ -6,7 +6,7 @@ describe Paperclip::Ffmpeg do
 
   describe "thumbnail" do
     it "does some stuff" do
-      video = Video.new(asset: android_video)
+      video = Video.new(asset: iphone_video)
       video.save
     end
   end

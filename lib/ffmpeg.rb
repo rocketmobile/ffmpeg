@@ -1,10 +1,11 @@
 require "ffmpeg/version"
 require "paperclip"
+require "streamio-ffmpeg"
 
 module Paperclip
   class Ffmpeg < Processor
-    attr_accessor :current_geometry, :target_geometry, :format, :whiny,
-                  :auto_rotate, :basename
+    attr_accessor :current_geometry, :target_geometry, :format,
+                  :basename, :time, :rotation
 
     def initialize(file, options = {}, attachment = nil)
       super
@@ -19,6 +20,7 @@ module Paperclip
       @format              = options[:format]
       @auto_rotate         = options.fetch(:auto_rotate, true)
       @time                = options.fetch(:time, 1)
+      @rotation            = calculate_rotation
       @pad_color           = options.fetch(:pad_color, "black")
 
       @current_format      = File.extname(@file.path)
@@ -32,22 +34,12 @@ module Paperclip
       dst = Tempfile.new([basename, format ? ".#{format}" : ''])
       dst.binmode
 
-      # if output_is_image?
-      #   @time = @time.call(@meta, @options) if @time.respond_to?(:call)
-      #   cli.filter_seek @time
-      # end
-      # if auto_rotate && @meta[:rotate]
-      #   cli.filter_rotate @meta[:rotate]
-      # end
-      # cli.add_output_param "vf", "crop=#{target_geometry.height}:#{target_geometry.width}"
-
-
       parameters = []
-      # parameters << source_file_options
-      parameters << "-ss 1 -i :source"
-      # parameters << transformation_command
-      # parameters << convert_options
-      parameters << "-qscale:v 2 -vframes 1 :dest"
+      parameters << "-ss  #{time}" if output_is_image?
+      parameters << "-i :source"
+      parameters << "-vframes 1"
+      parameters << "-vf " + transformation_command
+      parameters << ":dest"
       parameters = parameters.flatten.compact.join(" ").strip.squeeze(" ")
 
       begin
@@ -61,14 +53,15 @@ module Paperclip
       dst
     end
 
+    private
+
     def transformation_command
-      # scale, crop = @current_geometry.transformation_to(@target_geometry, crop?)
-      trans = []
-      # trans << "-coalesce" if animated?
-      # trans << "-auto-orient" if auto_orient
-      # trans << "-resize" << %["#{scale}"] unless scale.nil? || scale.empty?
-      # trans << "-crop" << %["#{crop}"] << "+repage" if crop
-      # trans << '-layers "optimize"' if animated?
+      # '"transpose=2, scale=410:ih*410/iw, crop=410:410"'
+      trans = '"'
+      trans << filter_rotate(rotation) if rotate?
+      trans << "scale=#{target_geometry.width}:ih*#{target_geometry.height}/iw,"
+      trans << "crop=#{target_geometry.width}:#{target_geometry.height}"
+      trans << '"'
       trans
     end
 
@@ -77,11 +70,26 @@ module Paperclip
     end
 
     def output_is_image?
-      !!@format.to_s.match(/jpe?g|png|gif$/)
+      !!format.to_s.match(/jpe?g|png|gif$/)
     end
 
-    def whiny?
-      whiny
+    def filter_rotate(rotation)
+      case rotation
+        when 90
+          "transpose=1,"
+        when 180
+          "vflip,hflip,"
+        when 270
+          "transpose=2,"
+      end
+    end
+
+    def rotate?
+      !!rotation
+    end
+
+    def calculate_rotation
+      FFMPEG::Movie.new(file.path).rotation rescue nil
     end
   end
 end
