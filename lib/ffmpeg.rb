@@ -32,21 +32,18 @@ module Paperclip
       dst = Tempfile.new([basename, format ? ".#{format}" : ''])
       dst.binmode
 
-      cli.add_destination(dst.path)
-
       # if output_is_image?
       #   @time = @time.call(@meta, @options) if @time.respond_to?(:call)
       #   cli.filter_seek @time
       # end
-
       # if auto_rotate && @meta[:rotate]
       #   cli.filter_rotate @meta[:rotate]
       # end
-
       # cli.add_output_param "vf", "crop=#{target_geometry.height}:#{target_geometry.width}"
 
+      parameters << "-i :source"
       begin
-        Paperclip.run('convert', arguments, local_options)
+        Paperclip.run("ffmpeg", parameters, source: "#{File.expand_path(src.path)}", dest: File.expand_path(dst.path))
       rescue Cocaine::ExitStatusError => e
         raise Paperclip::Error, "There was an error processing the thumbnail for #{basename}" if whiny
       rescue Cocaine::CommandNotFoundError => e
