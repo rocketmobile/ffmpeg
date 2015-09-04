@@ -36,7 +36,7 @@ module Paperclip
 
       parameters = []
       parameters << "-ss  #{time}" if output_is_image?
-      parameters << "-i :source"
+      parameters << "-y -i :source"
       parameters << "-vframes 1"
       parameters << "-vf " + transformation_command
       parameters << ":dest"
